@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observability Stack Map</title>
+<meta name="description" content="Interactive architecture map of the Grafana / Prometheus / Loki / Alertmanager stack deployed by deploy-observability-stack.sh">
+<style>
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --text: #1b1f24;
+  --muted: #5d6673;
+  --border: #d5dae1;
+  --host: #e9edf3;
+  --net: #f4f7fb;
+  --net-border: #9fb1c8;
+  --hostnet-border: #c3a46a;
+  --external: #fbfbfc;
+  --metrics: #2f6fd6;
+  --logs: #1f9a6b;
+  --alerts: #d1452f;
+  --query: #8a4fd0;
+  --focus: #f0a400;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1217; --surface: #171b22; --surface-2: #1e232c; --text: #e6e9ee; --muted: #9aa4b2;
+    --border: #2c333e; --host: #141820; --net: #1a1f28; --net-border: #4d6280; --hostnet-border: #8a7343;
+    --external: #161a21; --metrics: #6b9cf0; --logs: #3fc192; --alerts: #f0705a; --query: #b388f0;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1217; --surface: #171b22; --surface-2: #1e232c; --text: #e6e9ee; --muted: #9aa4b2;
+  --border: #2c333e; --host: #141820; --net: #1a1f28; --net-border: #4d6280; --hostnet-border: #8a7343;
+  --external: #161a21; --metrics: #6b9cf0; --logs: #3fc192; --alerts: #f0705a; --query: #b388f0;
+  --shadow: 0 1px 2px rgba(0,0,0,.4);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+header { padding: 20px 16px 8px; max-width: 1480px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0 0 4px; font-weight: 650; letter-spacing: -.01em; }
+header p { margin: 0; color: var(--muted); max-width: 900px; }
+.toolbar {
+  max-width: 1480px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+}
+.toolbar .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-right: 4px; }
+.chip {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px;
+  padding: 5px 12px 5px 10px; font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
+}
+.chip .sw { width: 18px; height: 3px; border-radius: 2px; }
+.chip[aria-pressed="true"] { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; }
+.chip:focus-visible, .node:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.spacer { flex: 1; }
+.layout { max-width: 1480px; margin: 0 auto; padding: 0 16px 24px; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+.canvas { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow-x: auto; }
+svg { display: block; width: 100%; min-width: 760px; height: auto; }
+aside { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 16px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+aside h2 { margin: 0 0 2px; font-size: 17px; }
+aside .kind { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+aside p { margin: 8px 0; }
+aside dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 12px 0; font-size: 13px; }
+aside dt { color: var(--muted); }
+aside dd { margin: 0; overflow-wrap: anywhere; }
+aside code, .mono { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 0 6px; }
+aside ul { margin: 0; padding-left: 18px; }
+aside li { margin: 2px 0; }
+.conn { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-top: 1px solid var(--border); font-size: 13px; cursor: pointer; }
+.conn:first-of-type { border-top: 0; }
+.conn .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; transform: translateY(1px); }
+.conn:hover { color: var(--focus); }
+.hint { color: var(--muted); font-size: 13px; }
+.warn { border-left: 3px solid var(--alerts); padding: 4px 10px; background: var(--surface-2); border-radius: 0 6px 6px 0; font-size: 13px; }
+
+/* SVG */
+.zone rect { rx: 12; }
+.zone-host { fill: var(--host); stroke: var(--border); }
+.zone-net { fill: var(--net); stroke: var(--net-border); stroke-dasharray: 6 4; }
+.zone-hostnet { fill: var(--net); stroke: var(--hostnet-border); stroke-dasharray: 6 4; }
+.zone-ext { fill: none; stroke: var(--border); stroke-dasharray: 2 4; }
+.zone-title { font-size: 12px; font-weight: 600; fill: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.zone-sub { font-size: 11px; fill: var(--muted); font-family: var(--mono); }
+.node { cursor: pointer; }
+.node rect.box { fill: var(--surface); stroke: var(--border); stroke-width: 1.2; rx: 9; transition: stroke .15s, opacity .15s; }
+.node.external rect.box { fill: var(--external); stroke-dasharray: 4 3; }
+.node .accent { rx: 2; }
+.node .title { font-size: 14px; font-weight: 650; fill: var(--text); }
+.node .sub { font-size: 11px; fill: var(--muted); font-family: var(--mono); }
+.node .port { font-size: 10.5px; font-family: var(--mono); }
+.node .port-bg { rx: 4; fill: var(--surface-2); }
+.node:hover rect.box, .node.selected rect.box { stroke: var(--focus); stroke-width: 2; }
+.edge path.line { fill: none; stroke-width: 2; transition: opacity .15s, stroke-width .15s; }
+.edge path.hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
+.edge path.flow { fill: none; stroke-width: 2; stroke-dasharray: 4 10; animation: flow 1.2s linear infinite; opacity: .9; }
+.edge.dashed path.line { stroke-dasharray: 6 5; }
+.edge text { font-size: 10.5px; font-family: var(--mono); paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.edge.selected path.line { stroke-width: 3.5; }
+@keyframes flow { to { stroke-dashoffset: -28; } }
+@media (prefers-reduced-motion: reduce) { .edge path.flow { animation: none; display: none; } }
+.dim { opacity: .14; }
+.edge.dim text { opacity: 0; }
+
+@media (max-width: 1100px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { position: static; max-height: none; }
+}
+footer { max-width: 1480px; margin: 0 auto; padding: 0 16px 28px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Observability stack — architecture map</h1>
+  <p>Reflects <span class="mono">deploy-observability-stack.sh</span> defaults (Prometheus 2.53.5 · Loki 2.9.17 · Grafana 11.1.13). Click any component or connection for details; use the filters to trace how metrics, logs and alerts flow. Values shown are the defaults written to <span class="mono">/opt/observability/.env</span>.</p>
+</header>
+
+<div class="toolbar" role="toolbar" aria-label="Flow filters">
+  <span class="label">Flows</span>
+  <button class="chip" data-flow="all" aria-pressed="true">All</button>
+  <button class="chip" data-flow="metrics" aria-pressed="false" style="color:var(--metrics)"><span class="sw" style="background:var(--metrics)"></span><span style="color:var(--text)">Metrics</span></button>
+  <button class="chip" data-flow="logs" aria-pressed="false" style="color:var(--logs)"><span class="sw" style="background:var(--logs)"></span><span style="color:var(--text)">Logs</span></button>
+  <button class="chip" data-flow="alerts" aria-pressed="false" style="color:var(--alerts)"><span class="sw" style="background:var(--alerts)"></span><span style="color:var(--text)">Alerts</span></button>
+  <button class="chip" data-flow="query" aria-pressed="false" style="color:var(--query)"><span class="sw" style="background:var(--query)"></span><span style="color:var(--text)">User / queries</span></button>
+  <span class="spacer"></span>
+  <button class="chip" id="themeBtn" aria-label="Toggle theme">◐ Theme</button>
+</div>
+
+<div class="layout">
+  <div class="canvas">
+    <svg id="map" viewBox="0 0 1240 760" role="img" aria-label="Observability stack architecture diagram">
+      <defs>
+        <marker id="arr-metrics" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--metrics)"/></marker>
+        <marker id="arr-logs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--logs)"/></marker>
+        <marker id="arr-alerts" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--alerts)"/></marker>
+        <marker id="arr-query" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--query)"/></marker>
+      </defs>
+      <g id="zones"></g>
+      <g id="edges"></g>
+      <g id="nodes"></g>
+    </svg>
+  </div>
+  <aside id="panel" aria-live="polite"></aside>
+</div>
+<footer>Image versions, ports and settings mirror the script in this repository. Re-generate this map by hand if you change them.</footer>
+
+<script>
+(() => {
+'use strict';
+
+// ---------------------------------------------------------------- data
+const ZONES = [
+  { cls: 'zone-ext', x: 12, y: 40, w: 218, h: 700, title: 'Working network', sub: '10.100.0.0/16' },
+  { cls: 'zone-ext', x: 1010, y: 40, w: 218, h: 700, title: 'External services' },
+  { cls: 'zone-host', x: 246, y: 40, w: 748, h: 700, title: 'Observability host', sub: 'Ubuntu 24.04 · /opt/observability · docker compose project "observability"' },
+  { cls: 'zone-net', x: 264, y: 92, w: 712, h: 488, title: 'Docker bridge network "monitoring"', sub: 'service-name DNS: prometheus, loki, alertmanager …' },
+  { cls: 'zone-hostnet', x: 264, y: 598, w: 712, h: 132, title: 'Host network namespace', sub: 'network_mode: host · pid: host' },
+];
+
+const W = 190, H = 72;
+const NODES = [
+  // external left
+  { id: 'browser', x: 26, y: 150, title: 'Browser', sub: 'LAN users / admins', ext: true, kind: 'Client',
+    desc: 'Operators open Grafana over HTTPS. Grafana is the only service published on all interfaces by default.',
+    props: { Access: 'https://HOST_IP:3000', TLS: 'self-signed (browser warning expected)', Auth: 'Grafana login, sign-up disabled' } },
+  { id: 'remote-ne', x: 26, y: 290, title: 'node_exporter', sub: 'remote hosts · systemd', ext: true, kind: 'Agent (install-node-exporter.sh)',
+    desc: 'Installed on each client machine by install-node-exporter.sh: SHA256-verified release, root-owned binary, dedicated user, hardened systemd unit (ProtectSystem=strict, NoNewPrivileges, no capabilities).',
+    props: { Version: 'v1.8.2 (amd64/arm64/armv7)', Listen: '--listen IP:9100 (default :9100)', Firewall: '--allow-from CIDR adds a UFW rule', Register: 'add host:9100 to NODE_EXPORTER_TARGETS' } },
+  { id: 'promtail', x: 26, y: 400, title: 'Grafana Alloy', sub: 'remote hosts · systemd', ext: true, kind: 'Log agent (install-alloy.sh)',
+    desc: 'Tails local log files and the systemd journal and pushes them to Loki. Replaces Promtail (EOL March 2026) with the same labels, so existing queries keep working.',
+    props: { Version: '1.21.2 (SHA256-verified)', Push: '--loki-url http://LOKI:3100/loki/api/v1/push', User: 'alloy (groups adm, systemd-journal) — not root', State: '/var/lib/alloy (positions survive reboot)', UI: '127.0.0.1:12345 (local only)' },
+    list: { title: 'Pipelines', items: ['/var/log/*.log except auth.log → job=varlogs', '/var/log/auth.log → job=auth', 'journal (max_age 12h) → job=systemd-journal + unit, level', 'all streams: host=<hostname>; new files read from the end'] },
+    notes: ['--disable-promtail stops the old agent so logs are not shipped twice.'] },
+  { id: 'targets', x: 26, y: 490, title: 'Probe targets', sub: 'HTTP(S) sites · ICMP hosts', ext: true, kind: 'Monitored endpoints',
+    desc: 'Endpoints probed from the outside by Blackbox Exporter. HTTP(S) targets accept self-signed certificates.',
+    props: { 'HTTP(S) list': 'BLACKBOX_TARGETS', 'ICMP list': 'BLACKBOX_ICMP_TARGETS (empty = disabled)' } },
+
+  // docker network
+  { id: 'grafana', x: 290, y: 150, title: 'Grafana', sub: 'grafana/grafana:11.1.13', port: '0.0.0.0:3000 HTTPS', kind: 'Visualisation',
+    desc: 'Dashboards and Explore. Data sources are provisioned automatically and talk to the backends over the docker network by service name.',
+    props: { Image: 'grafana/grafana:11.1.13', Publish: '${GRAFANA_BIND_ADDR}:${GRAFANA_PORT} → 3000', Protocol: 'HTTPS (grafana/tls/grafana.crt, 10 y)', Hardening: 'secure cookies · no sign-up · no telemetry/update checks', Volume: 'grafana_data → /var/lib/grafana (backed up)', Admin: 'GF_SECURITY_ADMIN_USER / _PASSWORD from .env (first start only)', Limits: 'GRAFANA_MEM_LIMIT=512m · 1 CPU', Health: 'curl https://localhost:3000/api/health', 'On change': 'restart' },
+    list: { title: 'Provisioned data sources', items: ['Prometheus — http://prometheus:9090 (default)', 'Loki — http://loki:3100', 'Alertmanager — http://alertmanager:9093'] } },
+  { id: 'alertmanager', x: 760, y: 150, title: 'Alertmanager', sub: 'prom/alertmanager:v0.27.0', port: '127.0.0.1:9093', kind: 'Alert routing',
+    desc: 'Groups, deduplicates and routes alerts to Telegram. Falls back to a null-receiver while the Telegram variables are placeholders, so it never crash-loops.',
+    props: { Image: 'prom/alertmanager:v0.27.0', Publish: '${BIND_ADDR}:${ALERTMANAGER_PORT} → 9093', Route: 'group_by [alertname, instance]', Timing: 'group_wait 30s · group_interval 5m · repeat 4h', Inhibit: 'critical mutes warning (same alertname+instance)', Secret: 'bot_token_file → secrets/telegram_bot_token (0400, uid 65534)', Cluster: 'gossip disabled (single instance, no :9094)', Limits: 'ALERTMANAGER_MEM_LIMIT=256m', 'On change': 'SIGHUP reload — no downtime' },
+    notes: ['Silences are exported via the API by backup-observability.sh and re-imported on restore.'] },
+  { id: 'prometheus', x: 525, y: 290, title: 'Prometheus', sub: 'prom/prometheus:v2.53.5', port: '127.0.0.1:9090', kind: 'Metrics TSDB',
+    desc: 'Pulls metrics from every exporter every 15 s, stores them for 30 days and evaluates alert rules.',
+    props: { Image: 'prom/prometheus:v2.53.5', Publish: '${BIND_ADDR}:${PROMETHEUS_PORT} → 9090', User: '65534 (non-root; TSDB migrated once)', Intervals: 'scrape 15s · eval 15s · timeout 10s', Retention: '${PROMETHEUS_RETENTION}=30d · ${PROMETHEUS_RETENTION_SIZE}', Volume: 'prometheus_data → /prometheus', Lifecycle: 'disabled — no /-/quit; reload via SIGHUP', Limits: 'PROMETHEUS_MEM_LIMIT=2g · 1 CPU', 'On change': 'SIGHUP reload — no downtime, verified' },
+    list: { title: 'Scrape jobs', items: ['prometheus, alertmanager, blackbox-exporter, loki (self-metrics)', 'grafana → https://grafana:3000/metrics', 'node-exporter → NODE_EXPORTER_TARGETS', 'postgres-exporter → postgres-exporter:9187', 'blackbox-https-selfsigned → BLACKBOX_TARGETS', 'blackbox-icmp → BLACKBOX_ICMP_TARGETS'] },
+    list2: { title: 'Alert rules', items: ['alert.rules.yml (yours, never overwritten): InstanceDown, HighNodeCPU, HighNodeMemory, BlackboxProbeFailed', 'rules/stack.rules.yml (generated): config-reload failures ×3, rule-eval failures, notification failures ×2, TSDB compactions, Loki 5xx', 'hosts: disk <10%, disk full in 24h, OOM kill', 'probes/DB: TLS cert < 14 days, PostgresDown'] } },
+  { id: 'loki', x: 290, y: 400, title: 'Loki', sub: 'grafana/loki:2.9.17', port: 'HOST_IP:3100', kind: 'Log store',
+    desc: 'Receives log streams from Grafana Alloy agents and serves LogQL queries to Grafana. Single-binary mode with filesystem storage.',
+    props: { Image: 'grafana/loki:2.9.17', Publish: '${LOKI_BIND_ADDR}:${LOKI_PORT} → 3100', 'Allowed from': 'LOKI_ALLOWED_CIDRS = 10.100.0.0/16 (DOCKER-USER chain)', Schema: 'boltdb-shipper v11 → tsdb v13 from ${LOKI_TSDB_FROM}', Retention: '${LOKI_RETENTION}=720h (compactor)', Ingestion: '8 MB/s, burst 16 MB', Auth: 'auth_enabled: false', Volume: 'loki_data → /loki', Limits: 'LOKI_MEM_LIMIT=1g · 1 CPU', 'On change': 'restart' },
+    notes: ['No authentication on push: only the working network may connect (observability-firewall.service re-applies the rule at boot and on Docker restarts). Container-to-container traffic is not filtered.', 'The TSDB (v13) index period is the prerequisite for upgrading to Loki 3.x.'] },
+  { id: 'blackbox', x: 290, y: 490, title: 'Blackbox Exporter', sub: 'blackbox-exporter:v0.25.0', port: '127.0.0.1:9115', kind: 'Synthetic probes',
+    desc: 'Executes probes on behalf of Prometheus: Prometheus calls /probe?target=…&module=…, Blackbox performs the check and returns probe_* metrics.',
+    props: { Image: 'prom/blackbox-exporter:v0.25.0', Publish: '${BIND_ADDR}:${BLACKBOX_PORT} → 9115', Security: 'read-only rootfs · cap_drop ALL + NET_RAW (ICMP)', 'On change': 'SIGHUP reload — no downtime' },
+    list: { title: 'Modules', items: ['https_selfsigned — used, insecure_skip_verify: true', 'icmp — used, ip4', 'http_2xx — available, strict TLS', 'tcp_connect — available', 'dns_udp — available (example.com A)'] } },
+  { id: 'pgexp', x: 760, y: 420, title: 'Postgres Exporter', sub: 'postgres-exporter:v0.15.0', port: '127.0.0.1:9187', kind: 'Exporter',
+    desc: 'Connects to the external PostgreSQL server and exposes database metrics for Prometheus.',
+    props: { Image: 'prometheuscommunity/postgres-exporter:v0.15.0', Publish: '${BIND_ADDR}:${POSTGRES_EXPORTER_PORT} → 9187', DSN: 'DATA_SOURCE_NAME ← POSTGRES_EXPORTER_DSN', 'DB role': 'pg_monitor', Security: 'non-root · read-only rootfs · cap_drop ALL', Alert: 'PostgresDown when pg_up == 0' },
+    notes: ['Wrap the DSN in single quotes in .env if the password contains $.'] },
+
+  // host network
+  { id: 'nodeexp', x: 525, y: 640, title: 'Node Exporter', sub: 'prom/node-exporter:v1.8.2', port: 'HOST_IP:9100', kind: 'Host metrics',
+    desc: 'Runs in the host network and PID namespaces with /proc, /sys and / mounted read-only, so it reports the real host rather than the container.',
+    props: { Image: 'prom/node-exporter:v1.8.2', Listen: '${HOST_IP}:${NODE_EXPORTER_PORT}', Mounts: '/proc, /sys, / (ro)', Excluded: 'sys, proc, dev, host, etc, docker mounts', Security: 'non-root · read-only rootfs · cap_drop ALL' },
+    notes: ['If UFW/iptables has INPUT DROP, allow the bridge subnet to port 9100, otherwise Prometheus sees it as down.'] },
+
+  // external right
+  { id: 'telegram', x: 1024, y: 150, title: 'Telegram', sub: 'api.telegram.org', ext: true, kind: 'Notification channel',
+    desc: 'Alertmanager sends HTML-formatted messages for firing and resolved alerts.',
+    props: { Bot: 'TELEGRAM_BOT_TOKEN (via token file)', Chat: 'TELEGRAM_CHAT_ID (negative for channels)', Format: 'parse_mode HTML · send_resolved' } },
+  { id: 'postgres', x: 1024, y: 420, title: 'PostgreSQL', sub: 'external database', ext: true, kind: 'Monitored database',
+    desc: 'Your database server. Not deployed by the script; Postgres Exporter connects to it with a monitoring role.',
+    props: { Connect: 'host:5432 from POSTGRES_EXPORTER_DSN', Role: 'CREATE USER postgres_exporter …; GRANT pg_monitor', SSL: 'sslmode=disable unless the server has SSL' } },
+];
+
+// flow: metrics | logs | alerts | query ; dir: arrow points to "to"
+const EDGES = [
+  { id: 'e-browser-grafana', from: 'browser', to: 'grafana', flow: 'query', label: 'HTTPS :3000',
+    desc: 'Users reach Grafana on GRAFANA_BIND_ADDR (default 0.0.0.0).', a: 'r', b: 'l' },
+  { id: 'e-grafana-prom', from: 'grafana', to: 'prometheus', flow: 'query', label: 'PromQL',
+    desc: 'Grafana data source → http://prometheus:9090 over the docker network. Not affected by BIND_ADDR.', a: 'b', b: 't', ax: 0.8, bx: 0.3 },
+  { id: 'e-grafana-loki', from: 'grafana', to: 'loki', flow: 'query', label: 'LogQL',
+    desc: 'Grafana data source → http://loki:3100 over the docker network.', a: 'b', b: 't', ax: 0.3, bx: 0.3 },
+  { id: 'e-grafana-am', from: 'grafana', to: 'alertmanager', flow: 'query', label: 'alert state', dashed: true,
+    desc: 'Grafana Alertmanager data source → http://alertmanager:9093 (view / silence alerts).', a: 'r', b: 'l' },
+  { id: 'e-prom-am', from: 'prometheus', to: 'alertmanager', flow: 'alerts', label: 'firing alerts',
+    desc: 'Prometheus evaluates alert.rules.yml and rules/stack.rules.yml every 15 s and pushes firing alerts to alertmanager:9093. It also scrapes Alertmanager’s own metrics.', a: 'r', b: 'b', ay: 0.35, bx: 0.3 },
+  { id: 'e-loki-am', from: 'loki', to: 'alertmanager', flow: 'alerts', label: 'ruler', dashed: true,
+    desc: 'Loki ruler is configured with alertmanager_url http://alertmanager:9093. No LogQL rules are shipped; add them under /loki/rules.', custom: 'loki-am' },
+  { id: 'e-am-tg', from: 'alertmanager', to: 'telegram', flow: 'alerts', label: 'HTTPS',
+    desc: 'telegram_configs with bot_token_file. Disabled (null-receiver) until TELEGRAM_* are set.', a: 'r', b: 'l' },
+  { id: 'e-promtail-loki', from: 'promtail', to: 'loki', flow: 'logs', label: 'push :3100',
+    desc: 'Alloy pushes to LOKI_BIND_ADDR:3100/loki/api/v1/push. Accepted only from LOKI_ALLOWED_CIDRS (10.100.0.0/16); other sources are dropped in the DOCKER-USER chain.', a: 'r', b: 'l' },
+  { id: 'e-prom-grafana', from: 'prometheus', to: 'grafana', flow: 'metrics', label: 'self-metrics', dashed: true,
+    desc: 'Job grafana scrapes https://grafana:3000/metrics (self-signed TLS, verification skipped).', a: 't', b: 'r', ax: 0.85, by: 0.85 },
+  { id: 'e-prom-remote', from: 'prometheus', to: 'remote-ne', flow: 'metrics', label: 'scrape :9100',
+    desc: 'Job node-exporter, targets from NODE_EXPORTER_TARGETS. Outbound from Prometheus.', a: 'l', b: 'r', ay: 0.5 },
+  { id: 'e-prom-node', from: 'prometheus', to: 'nodeexp', flow: 'metrics', label: 'scrape HOST_IP:9100',
+    desc: 'The local node-exporter is reached via HOST_IP because it lives in the host network, not on the bridge.', a: 'b', b: 't', ax: 0.75, bx: 0.75 },
+  { id: 'e-prom-bb', from: 'prometheus', to: 'blackbox', flow: 'metrics', label: '/probe',
+    desc: 'Jobs blackbox-https-selfsigned and blackbox-icmp relabel the target into ?target= and send the request to blackbox-exporter:9115.', a: 'b', b: 'r', ax: 0.15, by: 0.5 },
+  { id: 'e-bb-targets', from: 'blackbox', to: 'targets', flow: 'metrics', label: 'probe',
+    desc: 'Blackbox performs the actual check (TLS verification skipped for https_selfsigned).', a: 'l', b: 'r' },
+  { id: 'e-prom-pg', from: 'prometheus', to: 'pgexp', flow: 'metrics', label: 'scrape :9187',
+    desc: 'postgres-exporter:9187 over the docker network.', a: 'r', b: 't', ay: 0.75, bx: 0.3 },
+  { id: 'e-pg-db', from: 'pgexp', to: 'postgres', flow: 'metrics', label: 'SQL :5432',
+    desc: 'Postgres protocol using POSTGRES_EXPORTER_DSN.', a: 'r', b: 'l' },
+  { id: 'e-prom-loki', from: 'prometheus', to: 'loki', flow: 'metrics', label: 'self-metrics', dashed: true,
+    desc: 'Job loki scrapes loki:3100/metrics.', a: 'l', b: 'r', ay: 0.85, by: 0.25 },
+];
+
+// ---------------------------------------------------------------- render
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs = {}, parent) => {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (parent) parent.appendChild(n);
+  return n;
+};
+const byId = Object.fromEntries(NODES.map(n => [n.id, n]));
+const color = f => `var(--${f})`;
+
+const zonesG = document.getElementById('zones');
+for (const z of ZONES) {
+  const g = el('g', { class: 'zone' }, zonesG);
+  el('rect', { class: z.cls, x: z.x, y: z.y, width: z.w, height: z.h }, g);
+  el('text', { class: 'zone-title', x: z.x + 14, y: z.y + 22 }, g).textContent = z.title;
+  if (z.sub) el('text', { class: 'zone-sub', x: z.x + 14, y: z.y + 38 }, g).textContent = z.sub;
+}
+
+function anchor(n, side, f) {
+  const fx = f ?? 0.5;
+  switch (side) {
+    case 'l': return [n.x, n.y + H * fx];
+    case 'r': return [n.x + W, n.y + H * fx];
+    case 't': return [n.x + W * fx, n.y];
+    case 'b': return [n.x + W * fx, n.y + H];
+  }
+}
+function edgePath(e) {
+  const A = byId[e.from], B = byId[e.to];
+  if (e.custom === 'loki-am') {
+    const [x1, y1] = anchor(A, 'r', 0.75), [x2, y2] = anchor(B, 'b', 0.75);
+    return { d: `M${x1},${y1} C 720,${y1} 735,${y2 + 90} ${x2},${y2}`, mid: [620, y1 - 2] };
+  }
+  const fa = (e.a === 'l' || e.a === 'r') ? e.ay : e.ax;
+  const fb = (e.b === 'l' || e.b === 'r') ? e.by : e.bx;
+  const [x1, y1] = anchor(A, e.a, fa), [x2, y2] = anchor(B, e.b, fb);
+  const k = Math.max(40, Math.min(140, Math.hypot(x2 - x1, y2 - y1) * 0.4));
+  const off = s => ({ l: [-k, 0], r: [k, 0], t: [0, -k], b: [0, k] }[s]);
+  const [ax, ay] = off(e.a), [bx, by] = off(e.b);
+  const c1 = [x1 + ax, y1 + ay], c2 = [x2 + bx, y2 + by];
+  // cubic midpoint
+  const mx = 0.125 * x1 + 0.375 * c1[0] + 0.375 * c2[0] + 0.125 * x2;
+  const my = 0.125 * y1 + 0.375 * c1[1] + 0.375 * c2[1] + 0.125 * y2;
+  return { d: `M${x1},${y1} C ${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${x2},${y2}`, mid: [mx, my] };
+}
+
+const edgesG = document.getElementById('edges');
+const edgeEls = {};
+for (const e of EDGES) {
+  const { d, mid } = edgePath(e);
+  const g = el('g', { class: 'edge' + (e.dashed ? ' dashed' : ''), 'data-id': e.id, 'data-flow': e.flow }, edgesG);
+  el('path', { class: 'line', d, stroke: color(e.flow), 'marker-end': `url(#arr-${e.flow})` }, g);
+  if (!e.dashed) el('path', { class: 'flow', d, stroke: color(e.flow) }, g);
+  el('path', { class: 'hit', d }, g);
+  const t = el('text', { x: mid[0], y: mid[1] - 5, 'text-anchor': 'middle', fill: color(e.flow) }, g);
+  t.textContent = e.label;
+  const title = el('title', {}, g); title.textContent = `${byId[e.from].title} → ${byId[e.to].title}: ${e.label}`;
+  g.addEventListener('click', ev => { ev.stopPropagation(); selectEdge(e.id); });
+  edgeEls[e.id] = g;
+}
+
+const nodesG = document.getElementById('nodes');
+const nodeEls = {};
+const accentFor = n => {
+  const flows = new Set(EDGES.filter(e => e.from === n.id || e.to === n.id).map(e => e.flow));
+  for (const f of ['logs', 'alerts', 'metrics', 'query']) if (flows.has(f)) {
+    if (n.id === 'grafana' || n.id === 'browser') return 'query';
+    if (n.id === 'loki' || n.id === 'promtail') return 'logs';
+    if (n.id === 'alertmanager' || n.id === 'telegram') return 'alerts';
+    return 'metrics';
+  }
+  return 'metrics';
+};
+for (const n of NODES) {
+  const g = el('g', { class: 'node' + (n.ext ? ' external' : ''), tabindex: 0, role: 'button', 'aria-label': `${n.title}: ${n.kind}`, 'data-id': n.id, transform: `translate(${n.x},${n.y})` }, nodesG);
+  el('rect', { class: 'box', width: W, height: H }, g);
+  el('rect', { class: 'accent', x: 0, y: 10, width: 4, height: H - 20, fill: color(accentFor(n)) }, g);
+  el('text', { class: 'title', x: 16, y: 24 }, g).textContent = n.title;
+  el('text', { class: 'sub', x: 16, y: 41 }, g).textContent = n.sub;
+  if (n.port) {
+    const pw = n.port.length * 6.4 + 12;
+    el('rect', { class: 'port-bg', x: 14, y: 49, width: pw, height: 16 }, g);
+    const pt = el('text', { class: 'port', x: 20, y: 61, fill: n.port.startsWith('127.') ? 'var(--muted)' : 'var(--alerts)' }, g);
+    pt.textContent = n.port;
+  }
+  g.addEventListener('click', ev => { ev.stopPropagation(); selectNode(n.id); });
+  g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); selectNode(n.id); } });
+  g.addEventListener('mouseenter', () => hoverNode(n.id));
+  g.addEventListener('mouseleave', () => hoverNode(null));
+  nodeEls[n.id] = g;
+}
+
+// ---------------------------------------------------------------- state
+let flowFilter = 'all';
+let selected = null; // {type, id}
+let hovered = null;
+
+function applyDim() {
+  const focusNode = hovered || (selected?.type === 'node' ? selected.id : null);
+  const focusEdge = selected?.type === 'edge' ? selected.id : null;
+  const activeEdges = new Set();
+  const activeNodes = new Set();
+  for (const e of EDGES) {
+    let on = flowFilter === 'all' || e.flow === flowFilter;
+    if (focusNode) on = on && (e.from === focusNode || e.to === focusNode);
+    if (focusEdge && !hovered) on = e.id === focusEdge;
+    if (on) { activeEdges.add(e.id); activeNodes.add(e.from); activeNodes.add(e.to); }
+  }
+  if (focusNode) activeNodes.add(focusNode);
+  const anyFilter = flowFilter !== 'all' || focusNode || focusEdge;
+  for (const [id, g] of Object.entries(edgeEls)) {
+    g.classList.toggle('dim', !activeEdges.has(id));
+    g.classList.toggle('selected', id === focusEdge);
+  }
+  for (const [id, g] of Object.entries(nodeEls)) {
+    g.classList.toggle('dim', anyFilter && !activeNodes.has(id));
+    g.classList.toggle('selected', selected?.type === 'node' && selected.id === id);
+  }
+}
+function hoverNode(id) { hovered = id; applyDim(); }
+
+// ---------------------------------------------------------------- panel
+const panel = document.getElementById('panel');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const flowName = { metrics: 'Metrics', logs: 'Logs', alerts: 'Alerts', query: 'User / queries' };
+
+function renderOverview() {
+  panel.innerHTML = `
+    <div class="kind">Overview</div>
+    <h2>How the stack works</h2>
+    <p><b style="color:var(--metrics)">Metrics</b> — Prometheus pulls every 15 s from node-exporter (local and remote), Postgres Exporter, Blackbox probes, Loki and Alertmanager; data is kept 30 days.</p>
+    <p><b style="color:var(--logs)">Logs</b> — Grafana Alloy agents on each host push files and journald to Loki (720 h retention).</p>
+    <p><b style="color:var(--alerts)">Alerts</b> — Prometheus evaluates 17 rules (yours + generated self-monitoring) and sends firing alerts to Alertmanager, which groups them and posts to Telegram.</p>
+    <p><b style="color:var(--query)">Queries</b> — users only talk to Grafana over HTTPS; Grafana reaches the backends by service name inside the docker network.</p>
+    <h3>Exposure (defaults)</h3>
+    <dl>
+      <dt>0.0.0.0</dt><dd>Grafana :3000</dd>
+      <dt>HOST_IP</dt><dd>Loki :3100 (agents, only from 10.100.0.0/16), node-exporter :9100</dd>
+      <dt>127.0.0.1</dt><dd>Prometheus :9090, Alertmanager :9093, Blackbox :9115, Postgres Exporter :9187</dd>
+    </dl>
+    <p class="warn">Docker-published ports bypass UFW/iptables INPUT rules — exposure is controlled by the bind addresses in <code>.env</code> and, for Loki, by <code>LOKI_ALLOWED_CIDRS</code> in the DOCKER-USER chain.</p>
+    <h3>Deploy run</h3>
+    <ul>
+      <li>configs validated with the pinned binaries before anything is applied</li>
+      <li><code>docker compose up --wait</code>: fails unless every healthcheck passes</li>
+      <li>only changed services are touched — SIGHUP for Prometheus / Alertmanager / Blackbox, restart for Loki / Grafana</li>
+      <li>all containers: <code>no-new-privileges</code>, memory/CPU limits, log rotation 10 MB × 5</li>
+    </ul>
+    <p class="hint">Select a component or an arrow to see its configuration. Press <code>Esc</code> to return here.</p>`;
+}
+
+function connRow(e) {
+  const other = e.from === selected.id ? `→ ${byId[e.to].title}` : `← ${byId[e.from].title}`;
+  return `<div class="conn" data-edge="${e.id}"><span class="dot" style="background:${color(e.flow)}"></span><span><b>${esc(other)}</b> · ${esc(e.label)}</span></div>`;
+}
+
+function renderNode(n) {
+  const conns = EDGES.filter(e => e.from === n.id || e.to === n.id);
+  const props = Object.entries(n.props || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd><code>${esc(v)}</code></dd>`).join('');
+  const lst = l => l ? `<h3>${esc(l.title)}</h3><ul>${l.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
+  panel.innerHTML = `
+    <div class="kind">${esc(n.kind)}</div>
+    <h2>${esc(n.title)}</h2>
+    <p>${esc(n.desc)}</p>
+    <dl>${props}</dl>
+    ${lst(n.list)}${lst(n.list2)}
+    ${(n.notes || []).map(t => `<p class="warn">${esc(t)}</p>`).join('')}
+    <h3>Connections</h3>
+    ${conns.map(connRow).join('')}`;
+  panel.querySelectorAll('.conn').forEach(c => c.addEventListener('click', () => selectEdge(c.dataset.edge)));
+}
+
+function renderEdge(e) {
+  panel.innerHTML = `
+    <div class="kind" style="color:${color(e.flow)}">${flowName[e.flow]} flow</div>
+    <h2>${esc(byId[e.from].title)} → ${esc(byId[e.to].title)}</h2>
+    <dl><dt>Channel</dt><dd><code>${esc(e.label)}</code></dd></dl>
+    <p>${esc(e.desc)}</p>
+    <div class="conn" data-node="${e.from}"><span class="dot" style="background:var(--muted)"></span><span>Open <b>${esc(byId[e.from].title)}</b></span></div>
+    <div class="conn" data-node="${e.to}"><span class="dot" style="background:var(--muted)"></span><span>Open <b>${esc(byId[e.to].title)}</b></span></div>`;
+  panel.querySelectorAll('.conn').forEach(c => c.addEventListener('click', () => selectNode(c.dataset.node)));
+}
+
+function selectNode(id) { selected = { type: 'node', id }; renderNode(byId[id]); applyDim(); }
+function selectEdge(id) { selected = { type: 'edge', id }; renderEdge(EDGES.find(e => e.id === id)); applyDim(); }
+function clearSel() { selected = null; renderOverview(); applyDim(); }
+
+document.getElementById('map').addEventListener('click', clearSel);
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape') clearSel(); });
+
+// ---------------------------------------------------------------- filters / theme
+document.querySelectorAll('.chip[data-flow]').forEach(btn => btn.addEventListener('click', () => {
+  flowFilter = btn.dataset.flow;
+  document.querySelectorAll('.chip[data-flow]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+  applyDim();
+}));
+document.getElementById('themeBtn').addEventListener('click', () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  root.dataset.theme = dark ? 'light' : 'dark';
+  try { localStorage.setItem('obs-map-theme', root.dataset.theme); } catch (_) {}
+});
+try { const t = localStorage.getItem('obs-map-theme'); if (t) document.documentElement.dataset.theme = t; } catch (_) {}
+
+renderOverview();
+applyDim();
+})();
+</script>
+</body>
+</html>
