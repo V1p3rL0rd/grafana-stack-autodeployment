@@ -1,0 +1,11 @@
+# /opt/observability/prometheus/targets/remote-exporters.yml
+#
+# Exporters that already run elsewhere (no container on this host needed).
+# Restrict them on their side to this server's IP only (firewall / --web.listen-address).
+- targets: ["10.0.0.40:9182", "10.0.0.41:9182"]
+  labels:
+    job: windows-exporter
+
+- targets: ["10.0.0.50:9104"]
+  labels:
+    job: mysqld-exporter

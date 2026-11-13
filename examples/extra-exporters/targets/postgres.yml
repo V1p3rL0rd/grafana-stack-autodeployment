@@ -1,0 +1,10 @@
+# /opt/observability/prometheus/targets/postgres.yml   (yours — never overwritten)
+#
+# Picked up by the "extra" scrape job within ~1 minute, no reload needed.
+# The `job` label below overrides the default job="extra", so dashboards and
+# alerts can select on it. Exporter running in docker-compose.override.yml:
+# use its service name; exporter on another host: use host:port.
+- targets: ["postgres-exporter:9187"]
+  labels:
+    job: postgres-exporter
+    env: prod

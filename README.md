@@ -1,285 +1,285 @@
-# Grafana Observability Stack — automated deployment
+# Grafana Stack Autodeployment
 
-One idempotent Bash script that deploys a production-ready metrics, logs and alerting stack on **Ubuntu 24.04 LTS** with Docker Compose, plus agent installers for client hosts and a backup/restore tool.
+Production-ready monitoring and alerting stack for **Ubuntu 24.04 LTS**, deployed by a single idempotent Bash script on Docker Compose.
 
-Open **[`grafana-stack-diagram.html`](grafana-stack-diagram.html)** in a browser for an interactive map of the components, ports, bind addresses and data flows.
+**Traefik** is the only service exposed to the network: it terminates HTTPS on port 443 with a self-signed certificate (valid for 5 years) and proxies to **Grafana**. Prometheus, Alertmanager and the exporters are never reachable from outside the host. Any additional exporter can be plugged in without touching the script.
+
+Open [`grafana-stack-diagram.html`](grafana-stack-diagram.html) in a browser for an interactive map of components, ports and data flows.
+
+## Components
 
 | Component | Version | Role |
 |---|---|---|
-| Prometheus | 2.53.5 | Metrics TSDB, alert rule evaluation |
-| Alertmanager | 0.27.0 | Alert grouping and routing to Telegram |
-| Grafana | 11.1.13 | Dashboards over HTTPS, data sources auto-provisioned |
-| Loki | 2.9.17 | Log storage |
-| Blackbox Exporter | 0.25.0 | HTTP(S) and ICMP probes; self-signed TLS supported |
-| Node Exporter | 1.8.2 | Host metrics |
-| Postgres Exporter | 0.15.0 | PostgreSQL metrics |
-| Grafana Alloy (agent) | 1.21.2 | Log shipping from client hosts (replaces Promtail) |
+| Traefik | 3.7.18 | Single entry point: HTTPS :443 → Grafana, HTTP :80 → redirect to HTTPS |
+| Grafana | 11.1.13 | Dashboards; data sources provisioned automatically |
+| Prometheus | 2.53.5 | Metrics storage and alert rule evaluation |
+| Alertmanager | 0.27.0 | Alert grouping, deduplication and delivery to Telegram |
+| Node Exporter | 1.8.2 | Host metrics (this server and remote hosts) |
+| Blackbox Exporter | 0.25.0 | HTTP(S) and ICMP availability probes |
+| Extra exporters | any | PostgreSQL, Redis, MySQL, Windows… — see [Adding exporters](#adding-exporters) |
+
+## Features
+
+- **One command** to install, reconfigure or upgrade; safe to re-run at any time.
+- **Single HTTPS entry point** — everything else is loopback-only or internal to the Docker network; every deployment ends with an automatic exposure audit.
+- **Automatic TLS** — self-signed 5-year certificate, re-issued automatically before expiry or when host names change.
+- **Validated before applied** — configs are checked with the pinned `promtool`, `amtool`, `blackbox --config.check` and `docker compose config`; a broken config never reaches running services.
+- **Zero-downtime reloads** — only services whose configuration changed are reloaded (`SIGHUP`) or restarted.
+- **Hardened containers** — non-root users, read-only root filesystems, dropped capabilities, `no-new-privileges`, resource limits, log rotation.
+- **Self-monitoring** — alerts for failed reloads, undelivered notifications, Traefik 5xx rates and certificate expiry.
+- **Extensible** — add exporters through a compose override and Prometheus target files.
+- **Backup and restore** script included.
 
 ## Architecture
 
 ```
- LAN users ──HTTPS──► Grafana :3000 (0.0.0.0)
-                          │  docker network "monitoring" (service names)
-                          ├──► prometheus:9090 ──alerts──► alertmanager:9093 ──► Telegram
-                          ├──► loki:3100
-                          └──► alertmanager:9093
- prometheus ──scrape──► postgres-exporter:9187 ──► PostgreSQL
-            ──/probe──► blackbox-exporter:9115 ──► HTTP(S)/ICMP targets
-            ──scrape──► HOST_IP:9100 (node-exporter, host network)
-            ──scrape──► remote node_exporter :9100
- client hosts (working network, e.g. 10.100.0.0/16): Alloy ──push──► LOKI_BIND_ADDR:3100
+ Users ──HTTPS :443──► Traefik ──TLS──► Grafana ──► Prometheus ──► Alertmanager ──► Telegram
+        (:80 → 301)                        │             │
+                                           └─────────────┤ scrape
+                                                         ├──► Node Exporter (this host, docker0 gateway only)
+                                                         ├──► Node Exporter on remote hosts
+                                                         ├──► Blackbox Exporter ──► HTTP(S) / ICMP targets
+                                                         └──► extra exporters (prometheus/targets/*.yml)
 
- Published on the host:  0.0.0.0 → Grafana | HOST_IP → Loki (only from LOKI_ALLOWED_CIDRS), node-exporter
-                         127.0.0.1 → everything else
+ Exposed to the network:  Traefik :443, :80
+ Loopback only:           Prometheus :9090, Alertmanager :9093, Blackbox :9115
+ Docker network only:     Grafana, extra exporters
 ```
 
 ## Requirements
 
-- Ubuntu 24.04 LTS (other distributions work but are not tested), root access.
-- 2 vCPU, 4 GB RAM, and disk sized for retention (Prometheus ≈ 1–2 bytes per sample; Loki depends on log volume).
-- Access to Docker Hub, or the images pre-loaded for air-gapped installs (see [Air-gapped hosts](#air-gapped-hosts)).
-- Docker and the compose plugin ≥ 2.20 are installed from Ubuntu's repositories if they are missing.
+- Ubuntu 24.04 LTS with root access (other distributions may work but are not tested).
+- 2 vCPU, 4 GB RAM; disk sized for Prometheus retention (≈ 1–2 bytes per sample).
+- Free ports 80 and 443 (configurable).
+- Access to Docker Hub, or pre-loaded images (see [Air-gapped installation](#air-gapped-installation)).
+- Docker and the Compose plugin ≥ 2.20 — installed automatically if missing.
 
 ## Quick start
 
 ```bash
-git clone <this repository> && cd <repository>
-sudo bash deploy-observability-stack.sh        # 1st run: creates /opt/observability/.env
-sudo nano /opt/observability/.env              # set DSN, targets, Telegram
-sudo bash deploy-observability-stack.sh        # applies the configuration
+git clone https://github.com/V1p3rL0rd/grafana-stack-autodeployment.git
+cd grafana-stack-autodeployment
+sudo bash deploy-observability-stack.sh     # first run creates /opt/observability/.env
+sudo nano /opt/observability/.env           # set PUBLIC_HOST, targets, Telegram
+sudo bash deploy-observability-stack.sh     # apply
 ```
 
-Grafana: `https://<HOST_IP>:3000`, user `admin`. The password is in `.env`:
+Open `https://<PUBLIC_HOST>/` and sign in as `admin`. The generated password:
 
 ```bash
 sudo grep '^GF_SECURITY_ADMIN_PASSWORD=' /opt/observability/.env
 ```
 
-The browser warns about the self-signed certificate. That is expected.
+The browser shows a certificate warning because the certificate is self-signed. To remove it, add `/opt/observability/traefik/certs/tls.crt` to the clients' trusted certificates (e.g. via Group Policy or `update-ca-certificates`).
 
-## What a run does
+## How a deployment works
 
-1. Checks root, takes a lock (no parallel runs), and installs Docker if needed.
-2. Creates `.env` on the first run. Later runs only **append missing keys** and never change existing values.
-3. Validates `.env` (IP addresses, ports, retention formats).
-4. Generates every config. Your own `alert.rules.yml` is created once and never overwritten.
-5. **Validates the configs with the exact pinned binaries** (`promtool`, `amtool`, `blackbox --config.check`, `loki -verify-config`, `compose config`). On an error it stops before touching running services and prints the offending line.
-6. Runs `docker compose up --wait`, so the run fails (exit ≠ 0) if any service does not become healthy.
-7. Applies config changes **only to services whose files changed**:
-   - Prometheus, Alertmanager, Blackbox: `SIGHUP` reload with **no downtime**. Success is verified through `*_config_last_reload_successful`.
-   - Loki and Grafana: restart.
-   - Nothing changed: nothing is restarted.
-8. Checks every endpoint from the host and exits non-zero if one is unreachable.
+1. Checks prerequisites, takes a lock against parallel runs, installs Docker if needed.
+2. Creates `.env` on the first run; later runs only add missing keys and never change existing values.
+3. Validates `.env` (addresses, host names, ports).
+4. Generates all configuration files and the TLS certificate (if missing, expiring within 30 days, or the host names changed). User-owned files are never overwritten.
+5. Validates every generated config with the pinned binaries and stops on the first error.
+6. Starts the stack with `docker compose up --wait` — the run fails if any service is unhealthy.
+7. Applies changes only where needed: `SIGHUP` for Prometheus, Alertmanager and Blackbox; restart for Grafana and Traefik; nothing if nothing changed.
+8. Verifies Grafana through Traefik with certificate validation, the HTTP→HTTPS redirect and Prometheus→Node Exporter connectivity, then audits that only Traefik is exposed beyond `127.0.0.1`.
 
-## Configuration (`/opt/observability/.env`)
+## Configuration
+
+All settings live in `/opt/observability/.env` (mode `0600`). [`env.example`](env.example) documents every key.
 
 | Variable | Default | Description |
 |---|---|---|
-| `HOST_IP` | auto (default-route source IP) | Host address; node-exporter listens here |
-| `BIND_ADDR` | `127.0.0.1` | Where Prometheus, Alertmanager, Blackbox and Postgres exporter are published |
-| `GRAFANA_BIND_ADDR` | `0.0.0.0` | Where Grafana is published |
-| `LOKI_BIND_ADDR` | `HOST_IP` | Where Loki is published (agents push here) |
-| `LOKI_ALLOWED_CIDRS` | empty (no restriction) | Comma-separated networks allowed to push to Loki, e.g. `10.100.0.0/16` |
-| `*_PORT` | 3000, 9090, 9093, 9115, 9100, 9187, 3100 | Published ports |
-| `POSTGRES_EXPORTER_DSN` | placeholder | `postgresql://user:pass@host:5432/db?sslmode=disable`. Use **single quotes** if it contains `$` |
-| `BLACKBOX_TARGETS` | examples | Comma-separated HTTP(S) URLs (self-signed TLS accepted) |
-| `BLACKBOX_ICMP_TARGETS` | empty | Comma-separated hosts to ping; empty disables ICMP probes |
-| `NODE_EXPORTER_TARGETS` | `HOST_IP:9100` | Comma-separated `host:port` list |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | placeholders | While unset, a null-receiver is used (alerts are not delivered) |
+| `PUBLIC_HOST` | host IP | Name or IP users open in the browser; certificate CN and Grafana URL |
+| `TLS_EXTRA_SANS` | empty | Additional certificate names or IPs, comma-separated |
+| `TRAEFIK_BIND_ADDR` | `0.0.0.0` | Address Traefik is published on |
+| `TRAEFIK_HTTPS_PORT` / `TRAEFIK_HTTP_PORT` | `443` / `80` | Published ports (HTTP only redirects) |
+| `HOST_IP` | auto-detected | Server address; included in the certificate |
+| `BIND_ADDR` | `127.0.0.1` | Address for Prometheus, Alertmanager and Blackbox |
+| `NODE_EXPORTER_TARGETS` | this host | Node exporters to scrape, `host:port`, comma-separated |
+| `NODE_EXPORTER_LISTEN_ADDR` | docker0 gateway | Listen address of the local Node Exporter |
+| `BLACKBOX_TARGETS` | examples | HTTP(S) URLs to probe (self-signed TLS accepted) |
+| `BLACKBOX_ICMP_TARGETS` | empty | Hosts to ping; empty disables ICMP probes |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | placeholders | Alert delivery; alerts are discarded until set |
 | `ALERTMANAGER_EXTERNAL_URL` | `http://HOST_IP:9093` | Base URL used in alert links |
-| `PROMETHEUS_RETENTION` | `30d` | Time-based retention |
-| `PROMETHEUS_RETENTION_SIZE` | `0` (off) | Size cap, e.g. `40GB`; the oldest blocks are deleted first |
-| `LOKI_RETENTION` | `720h` | Log retention |
-| `LOKI_TSDB_FROM` | install date + 1 day | Date Loki switches to the TSDB index (schema v13). **Never change it after that date** |
-| `*_MEM_LIMIT`, `*_CPUS` | see `env.example` | Optional container resource limits |
+| `PROMETHEUS_RETENTION` | `30d` | How long metrics are kept |
+| `PROMETHEUS_RETENTION_SIZE` | `0` (off) | Size cap, e.g. `40GB` |
+| `GF_SECURITY_ADMIN_USER` / `_PASSWORD` | `admin` / random | Applied on the first Grafana start |
+| `TRAEFIK_MEM_LIMIT` / `TRAEFIK_CPUS` | `256m` / `1.0` | Traefik resource limits |
 
-`docker compose` reads the same file and interpolates `$`, so wrap any value that contains `$` in single quotes.
+Wrap values containing `$` in single quotes — Docker Compose reads the same file.
 
-## Security model
+## Security
 
-- **Network exposure is set by bind addresses, not by the firewall.** Docker-published ports bypass UFW/iptables `INPUT` rules. Prometheus, Alertmanager, Blackbox and Postgres exporter have no authentication, so they are loopback-only by default. Reach them over SSH:
-  `ssh -L 9090:127.0.0.1:9090 -L 9093:127.0.0.1:9093 user@server`
-- **Loki has no authentication on push**, so set `LOKI_ALLOWED_CIDRS` to the agents' networks (e.g. `10.100.0.0/16`). The script enforces it in the `DOCKER-USER` iptables chain, where Docker-published traffic is actually filtered (UFW rules would not apply). The `observability-firewall.service` systemd unit re-applies the rules at boot and on every Docker restart. Traffic between containers is never affected. Check the rules with `sudo /usr/local/sbin/observability-firewall status`.
-- `.env` is parsed as data (it is never `source`d) and is kept at mode `0600`.
-- The Telegram token lives in `alertmanager/secrets/telegram_bot_token` (mode `0400`, uid 65534) and is referenced via `bot_token_file`, so it never appears in `alertmanager.yml`.
-- The Grafana admin password is never printed. Grafana applies it on the **first** start only; to change it later run `docker exec -it grafana grafana cli admin reset-admin-password '<new>'`.
-- Containers run with `no-new-privileges`. Prometheus, Alertmanager, Loki, Grafana and the exporters run as non-root users. The stateless exporters also run with a read-only root filesystem and `cap_drop: ALL` (Blackbox keeps only `NET_RAW` for ICMP).
-- Prometheus runs **without** `--web.enable-lifecycle`, so there is no unauthenticated `/-/quit` endpoint. Reloads use `SIGHUP`.
-- Grafana: HTTPS with secure cookies, sign-up disabled, update checks and telemetry disabled. Loki usage reporting is disabled too.
+- **Network exposure.** Only Traefik is published to the network. Grafana and extra exporters are reachable only inside the Docker network; Prometheus, Alertmanager and Blackbox only on `127.0.0.1` (use `ssh -L 9090:127.0.0.1:9090 user@server`). The local Node Exporter listens on the Docker bridge gateway, which is not routable from the LAN. Docker-published ports bypass UFW, so exposure is controlled by bind addresses and enforced by the post-deployment audit.
+- **Traefik.** Runs as an unprivileged user with a read-only filesystem and no capabilities; uses file-based configuration only and never accesses the Docker socket; the dashboard/API is disabled; health and metrics endpoints are internal. TLS 1.2+; request headers are not logged. HSTS is intentionally disabled because it would make the self-signed certificate warning impossible to bypass.
+- **Certificate.** RSA 4096, 1825 days, server-auth only, SANs from `PUBLIC_HOST`, `HOST_IP`, `localhost` and `TLS_EXTRA_SANS`. Private key `0400`. Previous certificates are archived in `traefik/certs/archive/`.
+- **Traefik → Grafana** traffic is TLS-encrypted with certificate verification.
+- **Secrets.** `.env` is parsed as data, never executed. The Telegram token is stored in a separate `0400` file and is not written into `alertmanager.yml`. The Grafana admin password is never printed.
+- **Containers.** Non-root users, `no-new-privileges`, read-only filesystems and `cap_drop: ALL` for stateless services; Prometheus runs without the lifecycle API; Grafana has sign-up, telemetry and update checks disabled.
+
+## Adding exporters
+
+Exporters are added in two user-owned locations that the deploy script never overwrites. Ready-to-use examples are in [`examples/extra-exporters/`](examples/extra-exporters/).
+
+**1. Run the exporter** — `/opt/observability/docker-compose.override.yml`
+
+The script merges this file automatically, validates it, waits for health checks and includes it in the exposure audit. Attach services to the `monitoring` network and do not publish ports.
+
+```yaml
+services:
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      DATA_SOURCE_NAME: "${POSTGRES_EXPORTER_DSN:?set it in .env}"
+    networks: [monitoring]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9187/"]
+```
+
+**2. Tell Prometheus to scrape it** — `/opt/observability/prometheus/targets/<name>.yml`
+
+```yaml
+- targets: ["postgres-exporter:9187"]   # service name, or host:port for a remote exporter
+  labels:
+    job: postgres-exporter
+```
+
+Target files are picked up within a minute without a reload. Exporters running on other hosts need only step 2. After step 1, run the deploy script once to start the container. `InstanceDown` covers every new target automatically; exporter-specific alerts go into `prometheus/alert.rules.yml`.
 
 ## Alerting
 
-Two rule files are loaded:
-
-| File | Owner | Content |
+| File | Owner | Rules |
 |---|---|---|
-| `prometheus/alert.rules.yml` | **you**: created once, never overwritten | `InstanceDown`, `HighNodeCPU`, `HighNodeMemory`, `BlackboxProbeFailed` |
-| `prometheus/rules/stack.rules.yml` | the script, regenerated on every run | Self-monitoring and production rules (below) |
+| `prometheus/alert.rules.yml` | you (created once) | `InstanceDown`, `HighNodeCPU`, `HighNodeMemory`, `BlackboxProbeFailed` |
+| `prometheus/rules/stack.rules.yml` | generated | `PrometheusConfigReloadFailed`, `PrometheusNotificationsFailing`, `AlertmanagerConfigReloadFailed`, `AlertmanagerNotificationsFailing`, `TraefikTLSCertificateExpiringSoon`, `TraefikHighServerErrorRate` |
 
-Stack rules: `PrometheusConfigReloadFailed`, `PrometheusRuleEvaluationFailures`, `PrometheusNotificationsFailing`, `PrometheusTSDBCompactionsFailing`, `AlertmanagerConfigReloadFailed`, `AlertmanagerNotificationsFailing`, `BlackboxConfigReloadFailed`, `LokiRequestErrors`, `HostDiskSpaceLow`, `HostDiskWillFillIn24Hours`, `HostOomKillDetected`, `TLSCertificateExpiringSoon` (14 days), `PostgresDown`.
-
-Routing: `group_wait 30s`, `group_interval 5m`, `repeat_interval 4h`. A critical alert inhibits the matching warning.
-
-After editing your rules, validate and apply them without downtime:
+Routing: `group_wait 30s`, `group_interval 5m`, `repeat_interval 4h`; critical alerts inhibit matching warnings. To apply edited rules without downtime:
 
 ```bash
 cd /opt/observability
-docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v2.53.5 check config /etc/prometheus/prometheus.yml
+docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint promtool \
+  prom/prometheus:v2.53.5 check config /etc/prometheus/prometheus.yml
 docker compose kill -s SIGHUP prometheus
 ```
 
-Re-running the deploy script does the same, with validation included.
+## Monitoring remote hosts
 
-## Client hosts (agents)
-
-Copy the scripts to each client host.
-
-**Metrics: node_exporter**
+Install Node Exporter on each host with the included script:
 
 ```bash
 sudo ./install-node-exporter.sh --listen 10.0.0.15:9100 --allow-from 10.0.0.5/32
 ```
 
-This downloads the release, verifies its SHA256, installs the binary owned by root, and runs it as a dedicated user under a hardened systemd unit. Then add `10.0.0.15:9100` to `NODE_EXPORTER_TARGETS` on the server and re-run the deploy script.
-
-**Logs: Grafana Alloy**
-
-```bash
-sudo ./install-alloy.sh --loki-url http://10.0.0.5:3100/loki/api/v1/push --disable-promtail
-```
-
-Alloy ships `/var/log/*.log` (`job="varlogs"`), `/var/log/auth.log` (`job="auth"`) and the systemd journal (`job="systemd-journal"`, with labels `unit` and `level`). Every stream gets `host=<hostname>`. The labels match the old Promtail setup, so existing queries keep working. Alloy runs as user `alloy` with read access through the `adm` and `systemd-journal` groups (Promtail ran as root). Positions persist in `/var/lib/alloy`, and new files are read from the end, so history is not re-sent. Pipeline status is at `http://127.0.0.1:12345` on the client.
-
-**Migrating from Promtail.** Promtail reached end-of-life in March 2026. `--disable-promtail` stops and disables `promtail.service` once Alloy is installed. Remove the old binary with `sudo rm /usr/local/bin/promtail /etc/systemd/system/promtail.service`.
+It verifies the release checksum and runs the exporter as a dedicated user under a hardened systemd unit. Add `10.0.0.15:9100` to `NODE_EXPORTER_TARGETS` and re-run the deploy script.
 
 ## Backup and restore
 
 ```bash
 sudo ./backup-observability.sh --dest /var/backups/observability --keep 14
-sudo ./backup-observability.sh --restore /var/backups/observability/obs-20261026T081415Z
+sudo ./backup-observability.sh --restore /var/backups/observability/obs-<timestamp>
 ```
 
-| Included | Not included |
-|---|---|
-| `/opt/observability` (`.env`, secrets, TLS certificate, your rules and dashboards), the Grafana DB, active Alertmanager silences (exported through the API) | Prometheus and Loki data: large, bounded by retention, and rebuilt by scraping. Use storage-level snapshots (LVM/ZFS/VM) if you need them |
-
-Each backup is a `0700` directory with a `MANIFEST` and `SHA256SUMS`. Archives are integrity-checked after writing and checksums are verified before a restore. Grafana is paused for about a second for a consistent SQLite copy; Docker reports it as `unhealthy` until the next healthcheck (≤ 10 s). A restore keeps the current config in `/opt/observability.pre-restore-<ts>`.
-
-Daily cron:
+Backups contain `/opt/observability` (configuration, secrets, certificates, rules, override and target files, dashboards), the Grafana database and active Alertmanager silences. Prometheus data is not included — use storage-level snapshots if you need it. Each backup is checksummed and verified before restore.
 
 ```cron
 30 2 * * * root /path/to/backup-observability.sh --keep 14 >> /var/log/observability-backup.log 2>&1
 ```
 
-**Test a restore regularly.** A backup that has never been restored is not a backup.
-
-## Hosts with an existing installation
-
-If `/opt/observability` already contains a stack, the script adopts it in place:
-
-- missing `.env` keys are appended with safe defaults (existing values are untouched);
-- a Prometheus TSDB with root-owned files is `chown`ed once to uid 65534 (Prometheus runs as non-root);
-- containers whose definition differs are recreated once; data volumes are kept.
-
-Note that internal services are published on `127.0.0.1` by default. Set `BIND_ADDR` before running if they must stay reachable from the network.
-
 ## Production checklist
 
-- [ ] `.env`: real `POSTGRES_EXPORTER_DSN`, `BLACKBOX_TARGETS`, `NODE_EXPORTER_TARGETS`, Telegram token and chat ID
-- [ ] Test alert delivery: `docker exec alertmanager amtool alert add TestAlert severity=warning --alertmanager.url=http://localhost:9093`
-- [ ] `BIND_ADDR` and `LOKI_BIND_ADDR` match your network design; `LOKI_ALLOWED_CIDRS` set to the agent networks
-- [ ] `PROMETHEUS_RETENTION_SIZE` set below the free disk space
-- [ ] Backups scheduled in cron, and **one restore tested**
-- [ ] Dashboards imported (see below)
-- [ ] The deploy script, its `.env` and your `alert.rules.yml` kept under version control or in a secret store
+- [ ] `PUBLIC_HOST` and `TLS_EXTRA_SANS` cover every name users will open
+- [ ] Real `NODE_EXPORTER_TARGETS`, `BLACKBOX_TARGETS`, Telegram token and chat ID
+- [ ] Test alert: `docker exec alertmanager amtool alert add TestAlert severity=warning --alertmanager.url=http://localhost:9093`
+- [ ] From another host only ports 80/443 respond: `nc -zv <host> 3000 9090 9093 9100 9115` must fail
+- [ ] `PROMETHEUS_RETENTION_SIZE` below the free disk space
+- [ ] Daily backups scheduled and one restore tested
+- [ ] `.env`, `alert.rules.yml`, override and target files kept in version control or a secret store
 
-## Grafana dashboards
+## Dashboards
 
-No dashboards are downloaded automatically, so segmented networks without access to grafana.com work. Import them in **Dashboards → New → Import** by ID:
+Import in **Dashboards → New → Import** by ID:
 
 | ID | Dashboard |
 |---|---|
 | 1860 | Node Exporter Full |
 | 7587 | Prometheus Blackbox Exporter |
-| 9628 | PostgreSQL Database |
-| 13639 | Logs / App (Loki) |
+| 17346 | Traefik Official Standalone |
 
-Dashboard JSON files placed in `/opt/observability/grafana/dashboards/` are provisioned automatically (polled every 30 s).
+JSON files placed in `/opt/observability/grafana/dashboards/` are provisioned automatically.
 
-## Air-gapped hosts
-
-Pull failures are tolerated as long as every pinned image is already present locally. If one is missing, the script stops and lists it. Pre-load the images first:
+## Air-gapped installation
 
 ```bash
 # on a machine with internet access
 docker save prom/prometheus:v2.53.5 prom/alertmanager:v0.27.0 prom/blackbox-exporter:v0.25.0 \
-  prom/node-exporter:v1.8.2 prometheuscommunity/postgres-exporter:v0.15.0 \
-  grafana/loki:2.9.17 grafana/grafana:11.1.13 | gzip > observability-images.tar.gz
-# on the target
-gunzip -c observability-images.tar.gz | sudo docker load
+  prom/node-exporter:v1.8.2 grafana/grafana:11.1.13 traefik:v3.7.18 | gzip > images.tar.gz
+# on the target host
+gunzip -c images.tar.gz | sudo docker load
 ```
+
+Add the images of your extra exporters to the same archive.
 
 ## Operations
 
 ```bash
 cd /opt/observability
 docker compose ps                          # status and health
-docker compose logs -f <service>           # logs (rotated: 10 MB × 5 per container)
-docker compose kill -s SIGHUP prometheus   # reload rules/config without downtime
-docker compose down                        # stop (data volumes are kept)
+docker compose logs -f traefik             # access log (JSON)
+docker compose kill -s SIGHUP prometheus   # reload without downtime
+docker compose down                        # stop; data volumes are kept
+openssl x509 -in traefik/certs/tls.crt -noout -enddate -ext subjectAltName
 ```
 
 ## Troubleshooting
 
-**node-exporter is DOWN / `context deadline exceeded`.** node-exporter runs in the host network while Prometheus is on the bridge. With UFW/iptables `INPUT DROP`, allow the bridge subnet:
+| Symptom | Cause and fix |
+|---|---|
+| `502 Bad Gateway` in the browser | Traefik cannot reach or verify Grafana: `docker compose logs traefik grafana`. A replaced `grafana/tls/grafana.crt` must keep `DNS:grafana` in its SAN |
+| Certificate name mismatch | The opened name is not in the certificate. Add it to `PUBLIC_HOST` or `TLS_EXTRA_SANS` and re-run the script |
+| Node Exporter target is down | With UFW enabled, allow the compose network to reach port 9100: `docker network inspect observability_monitoring -f '{{(index .IPAM.Config 0).Subnet}}'`, then `ufw allow from <subnet> to <docker0-gateway> port 9100 proto tcp` |
+| Extra exporter is down | Service must be on the `monitoring` network and its name must match the target file; check `docker compose logs prometheus` |
+| Exposure audit fails | A service publishes a port beyond `127.0.0.1` — remove `ports:` or bind it to `127.0.0.1` |
+| `... is invalid:` during deploy | The validator shows file, line and reason; running services are not affected |
 
-```bash
-docker network inspect observability_monitoring -f '{{(index .IPAM.Config 0).Subnet}}'
-sudo ufw allow from <subnet> to any port 9100 proto tcp
-```
+## Limitations
 
-**`postgres-exporter cannot reach the database (pg_up=0)`.** Check the DSN, the `pg_hba.conf` entry for the server's IP, and `sslmode`. Use `sslmode=disable` if PostgreSQL has no TLS.
-
-**A deploy fails with `... is invalid:`.** The validator output names the file, line and reason. Running services keep their previous configuration.
-
-**`apt update` segfaults in the command-not-found hook.** This is a known Ubuntu 24.04 bug; the script disables the hook automatically.
-
-## Known limitations and roadmap
-
-- Prometheus 2.53, Loki 2.9 and Grafana 11.1 are on their **latest patch** releases, but these minor lines are past upstream support. The next step is a major upgrade (Prometheus 3.x, Loki 3.x, Grafana 12.x) tested on staging. Loki is already prepared: from `LOKI_TSDB_FROM` it writes the TSDB index (schema v13) that Loki 3 requires.
-- Single-node design: no HA for Prometheus/Alertmanager/Loki. For HA, run two Alertmanagers in a cluster and pair Prometheus instances (or move to Mimir/Thanos).
-- Grafana's TLS certificate is self-signed. For a trusted certificate, put a reverse proxy (Nginx/Traefik with ACME) in front of Grafana, or replace `grafana/tls/grafana.{crt,key}`.
+- Single-node design without high availability.
+- The certificate is self-signed. For a trusted certificate, replace `traefik/certs/tls.crt` and `tls.key` with one issued by your CA (the script keeps it as long as the host names match and it is not about to expire).
+- Apple platforms do not trust imported server certificates valid for more than 825 days; use a CA-issued certificate for managed Apple devices.
 
 ## Repository layout
 
 ```
-deploy-observability-stack.sh   server: deploy / upgrade / reconfigure
-backup-observability.sh         server: backup and restore
-install-node-exporter.sh        client: metrics agent
-install-alloy.sh                client: log agent
-env.example                     all .env variables with comments
-grafana-stack-diagram.html      interactive architecture map
+deploy-observability-stack.sh   deploy, reconfigure, upgrade
+backup-observability.sh         backup and restore
+install-node-exporter.sh        Node Exporter installer for remote hosts
+env.example                     documented configuration
+examples/extra-exporters/       compose override and target file examples
+grafana-stack-diagram.html      interactive architecture diagram
 ```
 
-On the server after deployment:
+Server layout after deployment:
 
 ```
 /opt/observability/
-├── .env                              # settings and secrets (0600)
-├── docker-compose.yml                # generated
+├── .env                              settings and secrets (0600)
+├── docker-compose.yml                generated
+├── docker-compose.override.yml       yours: extra exporters (optional)
 ├── prometheus/
-│   ├── prometheus.yml                # generated
-│   ├── alert.rules.yml               # yours: never overwritten
-│   └── rules/stack.rules.yml         # generated
-├── alertmanager/
-│   ├── alertmanager.yml              # generated, no secrets
-│   └── secrets/telegram_bot_token    # 0400, uid 65534
-├── blackbox/blackbox.yml             # generated
-├── loki/loki-config.yml              # generated
-├── grafana/{provisioning,dashboards,tls}/
-└── .state/config-hashes              # what was last applied
+│   ├── prometheus.yml                generated
+│   ├── alert.rules.yml               yours
+│   ├── rules/stack.rules.yml         generated
+│   └── targets/*.yml                 yours: extra scrape targets
+├── alertmanager/                     generated config, Telegram token (0400)
+├── blackbox/blackbox.yml             generated
+├── grafana/                          provisioning, dashboards, internal TLS
+└── traefik/                          static and dynamic config, certificate
 ```
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

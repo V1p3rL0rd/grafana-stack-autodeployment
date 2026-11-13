@@ -1,0 +1,64 @@
+###############################################################################
+# /opt/observability/docker-compose.override.yml   (yours — never overwritten)
+#
+# Extra exporters that run next to the stack. deploy-observability-stack.sh
+# merges this file automatically (compose -f docker-compose.yml -f <this>),
+# validates it, starts the services with `up --wait` and fails the deploy if
+# any of them is published beyond 127.0.0.1 (exposure audit).
+#
+# Rules for every exporter added here:
+#   - join the "monitoring" network; do NOT publish ports (Prometheus scrapes
+#     it by service name). If you need local debugging, publish on 127.0.0.1.
+#   - pin the image tag, run non-root, read-only, cap_drop ALL;
+#   - add a healthcheck (deploy waits for it);
+#   - add a target file in prometheus/targets/ (see targets/*.yml next to this).
+#
+# Secrets: reference ${VARS} from /opt/observability/.env (0600) — compose
+# reads it automatically. Wrap values containing $ in single quotes there.
+###############################################################################
+
+services:
+
+  # --- Example 1: PostgreSQL ------------------------------------------------
+  # .env:  POSTGRES_EXPORTER_DSN='postgresql://postgres_exporter:<pw>@10.0.0.20:5432/postgres?sslmode=require'
+  # DB:    CREATE USER postgres_exporter WITH PASSWORD '...'; GRANT pg_monitor TO postgres_exporter;
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: postgres-exporter
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      DATA_SOURCE_NAME: "${POSTGRES_EXPORTER_DSN:?set POSTGRES_EXPORTER_DSN in .env}"
+    networks: [monitoring]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+    deploy:
+      resources:
+        limits: { memory: 128m, cpus: "0.5" }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9187/"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
+
+  # --- Example 2: Redis (uncomment) -----------------------------------------
+  # redis-exporter:
+  #   image: oliver006/redis_exporter:v1.62.0
+  #   container_name: redis-exporter
+  #   restart: unless-stopped
+  #   user: "59000:59000"
+  #   read_only: true
+  #   cap_drop: [ALL]
+  #   security_opt: ["no-new-privileges:true"]
+  #   environment:
+  #     REDIS_ADDR: "redis://10.0.0.30:6379"
+  #     REDIS_PASSWORD: "${REDIS_EXPORTER_PASSWORD}"
+  #   networks: [monitoring]
+  #   deploy:
+  #     resources:
+  #       limits: { memory: 64m, cpus: "0.25" }
