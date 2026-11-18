@@ -1,8 +1,8 @@
 # Grafana Stack Autodeployment
 
-Production-ready monitoring and alerting stack for **Ubuntu 24.04 LTS**, deployed by a single idempotent Bash script on Docker Compose.
+Production-ready monitoring, log aggregation and alerting stack for **Ubuntu 24.04 LTS**, deployed by a single idempotent Bash script on Docker Compose.
 
-**Traefik** is the only service exposed to the network: it terminates HTTPS on port 443 with a self-signed certificate (valid for 5 years) and proxies to **Grafana**. Prometheus, Alertmanager and the exporters are never reachable from outside the host. Any additional exporter can be plugged in without touching the script.
+**Traefik** is the only service exposed to the network: it terminates HTTPS on port 443 with a self-signed certificate (valid for 5 years) and proxies to **Grafana** (UI) and **Loki** (secure log ingestion endpoint at `/loki/api/v1/push`). Prometheus, Alertmanager, Loki and the exporters are never reachable directly from outside the host. Any additional exporter can be plugged in without touching the script.
 
 Open [`grafana-stack-diagram.html`](grafana-stack-diagram.html) in a browser for an interactive map of components, ports and data flows.
 
@@ -10,9 +10,11 @@ Open [`grafana-stack-diagram.html`](grafana-stack-diagram.html) in a browser for
 
 | Component | Version | Role |
 |---|---|---|
-| Traefik | 3.7.18 | Single entry point: HTTPS :443 → Grafana, HTTP :80 → redirect to HTTPS |
-| Grafana | 11.1.13 | Dashboards; data sources provisioned automatically |
+| Traefik | 3.7.18 | Single entry point: HTTPS :443 → Grafana & Loki push, HTTP :80 → redirect to HTTPS |
+| Grafana | 11.1.13 | Dashboards; metrics & log data sources provisioned automatically |
 | Prometheus | 2.53.5 | Metrics storage and alert rule evaluation |
+| Loki | 3.1.1 | Centralized log storage and querying (TSDB schema) |
+| Grafana Alloy | 1.21.2 | Log collector for client hosts (journald, /var/log) |
 | Alertmanager | 0.27.0 | Alert grouping, deduplication and delivery to Telegram |
 | Node Exporter | 1.8.2 | Host metrics (this server and remote hosts) |
 | Blackbox Exporter | 0.25.0 | HTTP(S) and ICMP availability probes |
@@ -21,6 +23,7 @@ Open [`grafana-stack-diagram.html`](grafana-stack-diagram.html) in a browser for
 ## Features
 
 - **One command** to install, reconfigure or upgrade; safe to re-run at any time.
+- **Unified Observability** — metrics (Prometheus) and centralized logs (Loki) out of the box in Grafana.
 - **Single HTTPS entry point** — everything else is loopback-only or internal to the Docker network; every deployment ends with an automatic exposure audit.
 - **Automatic TLS** — self-signed 5-year certificate, re-issued automatically before expiry or when host names change.
 - **Validated before applied** — configs are checked with the pinned `promtool`, `amtool`, `blackbox --config.check` and `docker compose config`; a broken config never reaches running services.
@@ -34,16 +37,19 @@ Open [`grafana-stack-diagram.html`](grafana-stack-diagram.html) in a browser for
 
 ```
  Users ──HTTPS :443──► Traefik ──TLS──► Grafana ──► Prometheus ──► Alertmanager ──► Telegram
-        (:80 → 301)                        │             │
-                                           └─────────────┤ scrape
-                                                         ├──► Node Exporter (this host, docker0 gateway only)
-                                                         ├──► Node Exporter on remote hosts
-                                                         ├──► Blackbox Exporter ──► HTTP(S) / ICMP targets
-                                                         └──► extra exporters (prometheus/targets/*.yml)
+        (:80 → 301)       │                 │             │
+                          │                 │             ├──► Node Exporter (this host, docker0)
+                          │                 │             ├──► Node Exporter on remote hosts
+                          │                 │             ├──► Blackbox Exporter ──► HTTP(S) / ICMP
+                          │                 │             └──► extra exporters (*.yml)
+                          │                 │
+                          │                 └──► Loki ◄── scrape ── Prometheus
+                          │                       ▲
+ Alloy (remote) ──────────┴──/loki/api/v1/push────┘
 
  Exposed to the network:  Traefik :443, :80
  Loopback only:           Prometheus :9090, Alertmanager :9093, Blackbox :9115
- Docker network only:     Grafana, extra exporters
+ Docker network only:     Grafana, Loki, extra exporters
 ```
 
 ## Requirements
@@ -103,6 +109,7 @@ All settings live in `/opt/observability/.env` (mode `0600`). [`env.example`](en
 | `ALERTMANAGER_EXTERNAL_URL` | `http://HOST_IP:9093` | Base URL used in alert links |
 | `PROMETHEUS_RETENTION` | `30d` | How long metrics are kept |
 | `PROMETHEUS_RETENTION_SIZE` | `0` (off) | Size cap, e.g. `40GB` |
+| `LOKI_RETENTION` | `30d` | How long logs are kept in Loki |
 | `GF_SECURITY_ADMIN_USER` / `_PASSWORD` | `admin` / random | Applied on the first Grafana start |
 | `TRAEFIK_MEM_LIMIT` / `TRAEFIK_CPUS` | `256m` / `1.0` | Traefik resource limits |
 
@@ -176,6 +183,22 @@ sudo ./install-node-exporter.sh --listen 10.0.0.15:9100 --allow-from 10.0.0.5/32
 
 It verifies the release checksum and runs the exporter as a dedicated user under a hardened systemd unit. Add `10.0.0.15:9100` to `NODE_EXPORTER_TARGETS` and re-run the deploy script.
 
+## Collecting logs with Alloy
+
+Install Grafana Alloy on each client host to collect `/var/log/*.log`, `auth.log` and `systemd-journal` and forward them to Loki securely over HTTPS:
+
+```bash
+sudo ./install-alloy.sh --loki-url https://<PUBLIC_HOST>/loki/api/v1/push
+```
+
+The script:
+- Verifies the SHA256 release checksum.
+- Sets up a dedicated unprivileged user (`alloy`, groups `adm` and `systemd-journal`).
+- Configures a hardened systemd unit (`ProtectSystem=strict`, `NoNewPrivileges=yes`, `ProtectHome=yes`).
+- Automatically disables legacy `promtail` if migrating.
+
+View logs in Grafana: open **Explore**, select the **Loki** data source, and query by `{host="<hostname>"}` or `{job="systemd-journal"}`.
+
 ## Backup and restore
 
 ```bash
@@ -183,7 +206,7 @@ sudo ./backup-observability.sh --dest /var/backups/observability --keep 14
 sudo ./backup-observability.sh --restore /var/backups/observability/obs-<timestamp>
 ```
 
-Backups contain `/opt/observability` (configuration, secrets, certificates, rules, override and target files, dashboards), the Grafana database and active Alertmanager silences. Prometheus data is not included — use storage-level snapshots if you need it. Each backup is checksummed and verified before restore.
+Backups contain `/opt/observability` (configuration, secrets, certificates, rules, override and target files, dashboards), the Grafana database and active Alertmanager silences. Prometheus and Loki time-series data are not included — use storage-level snapshots (Veeam / Proxmox PBS) if you need them. Each backup is checksummed and verified before restore.
 
 ```cron
 30 2 * * * root /path/to/backup-observability.sh --keep 14 >> /var/log/observability-backup.log 2>&1
@@ -216,7 +239,7 @@ JSON files placed in `/opt/observability/grafana/dashboards/` are provisioned au
 ```bash
 # on a machine with internet access
 docker save prom/prometheus:v2.53.5 prom/alertmanager:v0.27.0 prom/blackbox-exporter:v0.25.0 \
-  prom/node-exporter:v1.8.2 grafana/grafana:11.1.13 traefik:v3.7.18 | gzip > images.tar.gz
+  prom/node-exporter:v1.8.2 grafana/loki:3.1.1 grafana/grafana:11.1.13 traefik:v3.7.18 | gzip > images.tar.gz
 # on the target host
 gunzip -c images.tar.gz | sudo docker load
 ```
@@ -229,6 +252,7 @@ Add the images of your extra exporters to the same archive.
 cd /opt/observability
 docker compose ps                          # status and health
 docker compose logs -f traefik             # access log (JSON)
+docker compose logs -f loki                # log ingester logs
 docker compose kill -s SIGHUP prometheus   # reload without downtime
 docker compose down                        # stop; data volumes are kept
 openssl x509 -in traefik/certs/tls.crt -noout -enddate -ext subjectAltName
@@ -257,6 +281,7 @@ openssl x509 -in traefik/certs/tls.crt -noout -enddate -ext subjectAltName
 deploy-observability-stack.sh   deploy, reconfigure, upgrade
 backup-observability.sh         backup and restore
 install-node-exporter.sh        Node Exporter installer for remote hosts
+install-alloy.sh                Grafana Alloy log shipper installer for remote hosts
 env.example                     documented configuration
 examples/extra-exporters/       compose override and target file examples
 grafana-stack-diagram.html      interactive architecture diagram
@@ -276,6 +301,7 @@ Server layout after deployment:
 │   └── targets/*.yml                 yours: extra scrape targets
 ├── alertmanager/                     generated config, Telegram token (0400)
 ├── blackbox/blackbox.yml             generated
+├── loki/loki-config.yml              generated
 ├── grafana/                          provisioning, dashboards, internal TLS
 └── traefik/                          static and dynamic config, certificate
 ```

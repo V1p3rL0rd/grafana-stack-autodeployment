@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Observability Stack Map</title>
-<meta name="description" content="Interactive architecture map of the Traefik / Grafana / Prometheus / Alertmanager stack deployed by deploy-observability-stack.sh">
+<meta name="description" content="Interactive architecture map of the Traefik / Grafana / Prometheus / Loki / Alertmanager stack deployed by deploy-observability-stack.sh">
 <style>
 :root {
   --bg: #f6f7f9;
@@ -120,7 +120,7 @@ footer { max-width: 1480px; margin: 0 auto; padding: 0 16px 28px; color: var(--m
 <body>
 <header>
   <h1>Observability stack — architecture map</h1>
-  <p>Reflects <span class="mono">deploy-observability-stack.sh</span> defaults (Traefik 3.7.18 · Grafana 11.1.13 · Prometheus 2.53.5 · Alertmanager 0.27.0). Click any component or connection for details; use the filters to trace how metrics, logs and alerts flow. Values shown are the defaults written to <span class="mono">/opt/observability/.env</span>.</p>
+  <p>Reflects <span class="mono">deploy-observability-stack.sh</span> defaults (Traefik 3.7.18 · Grafana 11.1.13 · Prometheus 2.53.5 · Loki 3.1.1 · Alertmanager 0.27.0). Click any component or connection for details; use the filters to trace how metrics, logs and alerts flow. Values shown are the defaults written to <span class="mono">/opt/observability/.env</span>.</p>
 </header>
 
 <div class="toolbar" role="toolbar" aria-label="Flow filters">
@@ -176,16 +176,20 @@ const NODES = [
   { id: 'targets', x: 26, y: 420, title: 'Probe targets', sub: 'HTTP(S) sites · ICMP hosts', ext: true, kind: 'Monitored endpoints',
     desc: 'Endpoints probed from the outside by Blackbox Exporter. HTTP(S) targets accept self-signed certificates.',
     props: { 'HTTP(S) list': 'BLACKBOX_TARGETS', 'ICMP list': 'BLACKBOX_ICMP_TARGETS (empty = disabled)' } },
+  { id: 'alloy', x: 26, y: 530, title: 'Grafana Alloy', sub: 'remote hosts · systemd', ext: true, kind: 'Log agent (install-alloy.sh)',
+    desc: 'Tails local log files and systemd journal and pushes them to Loki via Traefik HTTPS. Replaces Promtail.',
+    props: { Version: '1.21.2', Push: '--loki-url https://PUBLIC_HOST/loki/api/v1/push', User: 'alloy (groups adm, systemd-journal)', State: '/var/lib/alloy', TLS: 'insecure_skip_verify: true' },
+    list: { title: 'Pipelines', items: ['/var/log/*.log except auth.log → job=varlogs', '/var/log/auth.log → job=auth', 'systemd journal → job=systemd-journal'] } },
 
   // docker network
   { id: 'traefik', x: 278, y: 150, title: 'Traefik', sub: 'traefik:v3.7.18', port: '0.0.0.0:443 / :80', kind: 'Edge proxy · TLS termination',
     desc: 'The only container published beyond loopback. Terminates TLS with a self-signed 5-year certificate and proxies everything to Grafana. File provider only — no Docker socket.',
     props: { Image: 'traefik:v3.7.18', Publish: '${TRAEFIK_BIND_ADDR}:${TRAEFIK_HTTPS_PORT} → 8443, :${TRAEFIK_HTTP_PORT} → 8080 (redirect)', Certificate: 'traefik/certs/tls.crt · 1825 days · CN=PUBLIC_HOST · auto re-issued <30 days or on SAN change', TLS: 'min TLS 1.2 · no HSTS (self-signed)', Upstream: 'https://grafana:3000, verified against grafana.crt', Security: 'uid 65534 · read-only rootfs · cap_drop ALL · no-new-privileges', Internal: ':8082 /ping + /metrics (not published)', 'On change': 'dynamic: hot reload · static/cert: restart' },
-    list: { title: 'Routes', items: ['HTTPS / → grafana (security headers)', 'HTTP :80 → 301 to HTTPS', 'nothing else is routed'] } },
+    list: { title: 'Routes', items: ['HTTPS / → grafana (security headers)', 'HTTPS /loki → loki:3100 (log push)', 'HTTP :80 → 301 to HTTPS'] } },
   { id: 'grafana', x: 516, y: 150, title: 'Grafana', sub: 'grafana/grafana:11.1.13', port: 'internal :3000 HTTPS', kind: 'Visualisation',
     desc: 'Dashboards and Explore. Data sources are provisioned automatically and talk to the backends over the docker network by service name.',
     props: { Image: 'grafana/grafana:11.1.13', Publish: 'not published — only via Traefik', 'Root URL': 'https://PUBLIC_HOST/', Protocol: 'HTTPS (grafana/tls/grafana.crt, 10 y)', Hardening: 'secure cookies · no sign-up · no telemetry/update checks', Volume: 'grafana_data → /var/lib/grafana (backed up)', Admin: 'GF_SECURITY_ADMIN_USER / _PASSWORD from .env (first start only)', Limits: 'GRAFANA_MEM_LIMIT=512m · 1 CPU', Health: 'curl https://localhost:3000/api/health', 'On change': 'restart' },
-    list: { title: 'Provisioned data sources', items: ['Prometheus — http://prometheus:9090 (default)', 'Alertmanager — http://alertmanager:9093'] } },
+    list: { title: 'Provisioned data sources', items: ['Prometheus — http://prometheus:9090 (default)', 'Alertmanager — http://alertmanager:9093', 'Loki — http://loki:3100'] } },
   { id: 'alertmanager', x: 776, y: 150, title: 'Alertmanager', sub: 'prom/alertmanager:v0.27.0', port: '127.0.0.1:9093', kind: 'Alert routing',
     desc: 'Groups, deduplicates and routes alerts to Telegram. Falls back to a null-receiver while the Telegram variables are placeholders, so it never crash-loops.',
     props: { Image: 'prom/alertmanager:v0.27.0', Publish: '${BIND_ADDR}:${ALERTMANAGER_PORT} → 9093', Route: 'group_by [alertname, instance]', Timing: 'group_wait 30s · group_interval 5m · repeat 4h', Inhibit: 'critical mutes warning (same alertname+instance)', Secret: 'bot_token_file → secrets/telegram_bot_token (0400, uid 65534)', Cluster: 'gossip disabled (single instance, no :9094)', Limits: 'ALERTMANAGER_MEM_LIMIT=256m', 'On change': 'SIGHUP reload — no downtime' },
@@ -203,6 +207,11 @@ const NODES = [
   { id: 'extra', x: 760, y: 420, title: 'Extra exporters', sub: 'docker-compose.override.yml', port: 'internal only', kind: 'Your exporters (optional)',
     desc: 'Any exporter you need (postgres, redis, mysql, …) runs next to the stack without editing the deploy script. Examples in examples/extra-exporters/.',
     props: { Define: '/opt/observability/docker-compose.override.yml (yours, merged automatically)', Scrape: 'prometheus/targets/<name>.yml — file_sd, job label per file', Network: 'monitoring, no published ports (exposure audit enforces it)', Deploy: 'validated + up --wait like the base services', Secrets: '${VARS} from .env (0600)', Alerts: 'InstanceDown covers them; specific rules → alert.rules.yml' } },
+
+  { id: 'loki', x: 760, y: 290, title: 'Loki', sub: 'grafana/loki:3.1.1', port: 'internal :3100', kind: 'Log aggregation',
+    desc: 'Stores logs and indexes labels with TSDB schema. Ingestion is exposed via Traefik over HTTPS on /loki/api/v1/push.',
+    props: { Image: 'grafana/loki:3.1.1', User: '10001 (non-root)', Storage: 'filesystem (TSDB schema v13)', Retention: '${LOKI_RETENTION}=30d', Volume: 'loki_data → /loki', Push: 'https://PUBLIC_HOST/loki/api/v1/push via Traefik', Limits: 'LOKI_MEM_LIMIT=1g · 1.5 CPU' },
+    notes: ['Prometheus scrapes Loki internal metrics on :3100/metrics.'] },
 
   // host network
   { id: 'nodeexp', x: 525, y: 640, title: 'Node Exporter', sub: 'prom/node-exporter:v1.8.2', port: 'docker0 GW:9100', kind: 'Host metrics',
@@ -247,6 +256,14 @@ const EDGES = [
     desc: 'Same job extra: remote host:port targets from the target files. Outbound from Prometheus.', a: 'r', b: 'l', ay: 0.3, by: 0.3 },
   { id: 'e-bb-targets', from: 'blackbox', to: 'targets', flow: 'metrics', label: 'probe',
     desc: 'Blackbox performs the actual check (TLS verification skipped for https_selfsigned).', a: 'l', b: 'r' },
+  { id: 'e-alloy-traefik', from: 'alloy', to: 'traefik', flow: 'logs', label: 'HTTPS :443',
+    desc: 'Alloy pushes logs over HTTPS to Traefik on /loki/api/v1/push.', a: 'r', b: 'l' },
+  { id: 'e-traefik-loki', from: 'traefik', to: 'loki', flow: 'logs', label: 'HTTP :3100',
+    desc: 'Traefik proxies /loki requests to Loki:3100 over the internal Docker network.', a: 'r', b: 'l', ay: 0.7, by: 0.2 },
+  { id: 'e-grafana-loki', from: 'grafana', to: 'loki', flow: 'query', label: 'LogQL',
+    desc: 'Grafana queries Loki directly over the internal Docker network at http://loki:3100.', a: 'r', b: 't', ax: 0.95, bx: 0.2 },
+  { id: 'e-prom-loki', from: 'prometheus', to: 'loki', flow: 'metrics', label: 'self-metrics', dashed: true,
+    desc: 'Prometheus scrapes Loki’s /metrics on http://loki:3100/metrics.', a: 'r', b: 'l', ay: 0.5, by: 0.5 },
 ];
 
 // ---------------------------------------------------------------- render
